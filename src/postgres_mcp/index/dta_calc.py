@@ -414,9 +414,7 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                 continue
             table_name = candidate.table.lower()
             candidate_column = candidate.columns[0].lower()
-            matching_indexes = [
-                idx for idx in parsed_existing_indexes_by_table.get(table_name, []) if candidate_column in idx["columns"][1:]
-            ]
+            matching_indexes = [idx for idx in parsed_existing_indexes_by_table.get(table_name, []) if candidate_column in idx["columns"][1:]]
             if matching_indexes:
                 candidate.potential_problematic_reason = "pg18_skip_scan_redundant"
 

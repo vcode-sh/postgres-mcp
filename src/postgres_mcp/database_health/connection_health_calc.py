@@ -61,12 +61,7 @@ class ConnectionHealthCalc:
                         "Idle in transaction wait events:",
                         *(
                             f"- {event['wait_event_type']}:{event['wait_event']} "
-                            f"(count={event['count']})"
-                            + (
-                                f" - {event['wait_event_description']}"
-                                if event["wait_event_description"]
-                                else ""
-                            )
+                            f"(count={event['count']})" + (f" - {event['wait_event_description']}" if event["wait_event_description"] else "")
                             for event in wait_events
                         ),
                     ]

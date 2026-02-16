@@ -84,9 +84,7 @@ class ExplainPlanTool:
             serialize=serialize,
         )
 
-    async def explain_analyze(
-        self, sql_query: str, include_memory: bool = False, serialize: str | None = None
-    ) -> ExplainPlanArtifact | ErrorResult:
+    async def explain_analyze(self, sql_query: str, include_memory: bool = False, serialize: str | None = None) -> ExplainPlanArtifact | ErrorResult:
         """
         Generate an EXPLAIN ANALYZE plan for a SQL query.
 

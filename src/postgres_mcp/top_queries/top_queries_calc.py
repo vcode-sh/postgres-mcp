@@ -28,6 +28,7 @@ install_pg_stat_statements_message = (
     "but this is usually negligible unless under extreme load."
 )
 
+
 class TopQueriesCalc:
     """Tool for retrieving the slowest SQL queries."""
 

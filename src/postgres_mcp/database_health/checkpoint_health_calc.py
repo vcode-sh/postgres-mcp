@@ -34,10 +34,7 @@ class CheckpointHealthCalc:
             checkpoint_line += f", done={metrics.num_done}"
 
         restartpoint_line = (
-            "Restartpoints: "
-            f"timed={metrics.restartpoints_timed}, "
-            f"requested={metrics.restartpoints_req}, "
-            f"done={metrics.restartpoints_done}"
+            f"Restartpoints: timed={metrics.restartpoints_timed}, requested={metrics.restartpoints_req}, done={metrics.restartpoints_done}"
         )
         io_line = f"Checkpoint I/O time: write={metrics.write_time:.1f} ms, sync={metrics.sync_time:.1f} ms"
         buffers_line = f"Buffers written: shared={metrics.buffers_written}"
