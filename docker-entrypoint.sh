@@ -62,30 +62,38 @@ if [[ -n "$DATABASE_URI" && "$DATABASE_URI" == *"postgres"*"://"*"localhost"* ]]
     fi
 fi
 
-# Check if SSE transport is specified and --sse-host is not already set
-has_sse=false
-has_sse_host=false
+# Detect transport type and whether a custom host is already set
+transport_type=""
+has_custom_host=false
 
 for arg in "${processed_args[@]}"; do
-    if [[ "$arg" == "--transport" ]]; then
-        # Check next argument for "sse"
-        for next_arg in "${processed_args[@]}"; do
-            if [[ "$next_arg" == "sse" ]]; then
-                has_sse=true
-                break
-            fi
-        done
-    elif [[ "$arg" == "--transport=sse" ]]; then
-        has_sse=true
-    elif [[ "$arg" == "--sse-host"* ]]; then
-        has_sse_host=true
+    if [[ "$arg" == "--transport=sse" ]]; then
+        transport_type="sse"
+    elif [[ "$arg" == "--transport=streamable-http" ]]; then
+        transport_type="streamable-http"
+    elif [[ "$arg" == "--sse-host"* || "$arg" == "--streamable-http-host"* ]]; then
+        has_custom_host=true
     fi
 done
 
-# Add --sse-host if needed
-if [[ "$has_sse" == true ]] && [[ "$has_sse_host" == false ]]; then
-    echo "SSE transport detected, adding --sse-host=0.0.0.0" >&2
-    processed_args+=("--sse-host=0.0.0.0")
+# Also check --transport <value> (space-separated)
+prev_arg=""
+for arg in "${processed_args[@]}"; do
+    if [[ "$prev_arg" == "--transport" ]]; then
+        transport_type="$arg"
+    fi
+    prev_arg="$arg"
+done
+
+# Bind to 0.0.0.0 inside the container so the port is reachable from outside
+if [[ "$has_custom_host" == false ]]; then
+    if [[ "$transport_type" == "sse" ]]; then
+        echo "SSE transport detected, adding --sse-host=0.0.0.0" >&2
+        processed_args+=("--sse-host=0.0.0.0")
+    elif [[ "$transport_type" == "streamable-http" ]]; then
+        echo "Streamable HTTP transport detected, adding --streamable-http-host=0.0.0.0" >&2
+        processed_args+=("--streamable-http-host=0.0.0.0")
+    fi
 fi
 
 echo "----------------" >&2

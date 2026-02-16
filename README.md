@@ -61,7 +61,7 @@ You need two things:
 **With Docker** (recommended — no dependency issues):
 
 ```bash
-docker pull crystaldba/postgres-mcp
+docker pull vcodesh/postgres-mcp
 ```
 
 **With Python** (via pipx or uv):
@@ -92,7 +92,7 @@ Config file location:
       "args": [
         "run", "-i", "--rm",
         "-e", "DATABASE_URI",
-        "crystaldba/postgres-mcp",
+        "vcodesh/postgres-mcp",
         "--access-mode=unrestricted"
       ],
       "env": {
@@ -225,12 +225,12 @@ By default, the server runs locally over stdio. For remote or shared setups, you
 # SSE transport
 docker run -p 8000:8000 \
   -e DATABASE_URI=postgresql://username:password@localhost:5432/dbname \
-  crystaldba/postgres-mcp --access-mode=unrestricted --transport=sse
+  vcodesh/postgres-mcp --access-mode=unrestricted --transport=sse
 
 # Streamable HTTP transport
 docker run -p 8000:8000 \
   -e DATABASE_URI=postgresql://username:password@localhost:5432/dbname \
-  crystaldba/postgres-mcp --access-mode=unrestricted --transport=streamable-http
+  vcodesh/postgres-mcp --access-mode=unrestricted --transport=streamable-http
 ```
 
 Then configure your MCP client to connect:
