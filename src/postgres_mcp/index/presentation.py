@@ -195,6 +195,14 @@ class TextPresentation:
                     "You might not be able to create this index if the index row size becomes too large "
                     "(i.e., more than 8191 bytes)."
                 )
+            elif rec.potential_problematic_reason == "pg18_skip_scan_redundant":
+                rec_dict["warning"] = (
+                    "On PostgreSQL 18+, this recommendation can be partially redundant: "
+                    "B-tree skip scan may already leverage an existing multicolumn index "
+                    "for the same predicate. Validate with EXPLAIN before creating it."
+                )
+                rec_dict["confidence"] = "lower"
+                rec_dict["priority"] = "low"
             elif rec.potential_problematic_reason:
                 rec_dict["warning"] = f"This index is potentially problematic because it includes a {rec.potential_problematic_reason} column."
             recommendations.append(rec_dict)

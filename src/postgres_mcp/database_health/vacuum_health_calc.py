@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 from ..sql import SafeSqlDriver
 from ..sql import SqlDriver
+from ..sql import has_view_column
 
 
 @dataclass
@@ -26,16 +27,23 @@ class VacuumHealthCalc:
     async def transaction_id_danger_check(self) -> str:
         """Check if any tables are approaching transaction ID wraparound."""
         metrics = await self._get_transaction_id_metrics()
+        timing_summary = await self._get_vacuum_timing_summary()
 
         if not metrics:
-            return "No tables found with transaction ID wraparound danger."
+            base_result = "No tables found with transaction ID wraparound danger."
+            if timing_summary:
+                return f"{base_result}\n{timing_summary}"
+            return base_result
 
         # Sort by transactions left ascending to show most critical first
         metrics.sort(key=lambda x: x.transactions_left)
 
         unhealthy = [m for m in metrics if not m.is_healthy]
         if not unhealthy:
-            return "All tables have healthy transaction ID age."
+            base_result = "All tables have healthy transaction ID age."
+            if timing_summary:
+                return f"{base_result}\n{timing_summary}"
+            return base_result
 
         result = ["Tables approaching transaction ID wraparound:"]
         for metric in unhealthy:
@@ -43,6 +51,8 @@ class VacuumHealthCalc:
                 f"Table '{metric.schema}.{metric.table}' has {metric.transactions_left:,} transactions "
                 f"remaining before wraparound (threshold: {self.threshold:,})"
             )
+        if timing_summary:
+            result.append(timing_summary)
         return "\n".join(result)
 
     async def _get_transaction_id_metrics(self) -> list[TransactionIdMetrics]:
@@ -100,3 +110,35 @@ class VacuumHealthCalc:
             }
             for row in result_list
         }
+
+    async def _get_vacuum_timing_summary(self) -> str | None:
+        """Get PG18+ aggregate vacuum/analyze timing summary if available."""
+        required_columns = [
+            "total_vacuum_time",
+            "total_autovacuum_time",
+            "total_analyze_time",
+            "total_autoanalyze_time",
+        ]
+        for column in required_columns:
+            if not await has_view_column(self.sql_driver, "pg_catalog", "pg_stat_all_tables", column):
+                return None
+
+        result = await self.sql_driver.execute_query("""
+            SELECT
+                COALESCE(SUM(total_vacuum_time), 0)::double precision AS total_vacuum_time,
+                COALESCE(SUM(total_autovacuum_time), 0)::double precision AS total_autovacuum_time,
+                COALESCE(SUM(total_analyze_time), 0)::double precision AS total_analyze_time,
+                COALESCE(SUM(total_autoanalyze_time), 0)::double precision AS total_autoanalyze_time
+            FROM pg_catalog.pg_stat_all_tables
+        """)
+        if not result:
+            return None
+
+        row = dict(result[0].cells)
+        return (
+            "Vacuum timing totals (ms): "
+            f"manual vacuum={float(row['total_vacuum_time']):.1f}, "
+            f"autovacuum={float(row['total_autovacuum_time']):.1f}, "
+            f"manual analyze={float(row['total_analyze_time']):.1f}, "
+            f"autoanalyze={float(row['total_autoanalyze_time']):.1f}"
+        )

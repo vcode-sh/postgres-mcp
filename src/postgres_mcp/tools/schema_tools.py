@@ -6,6 +6,7 @@ from mcp.types import CallToolResult
 from pydantic import Field
 
 from postgres_mcp.sql import SafeSqlDriver
+from postgres_mcp.sql import has_view_column
 
 from ._response import format_error_response
 from ._response import format_text_response
@@ -131,7 +132,13 @@ async def postgres_get_object_details(
             col_rows = await SafeSqlDriver.execute_param_query(
                 sql_driver,
                 """
-                SELECT column_name, data_type, is_nullable, column_default
+                SELECT
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    column_default,
+                    is_generated,
+                    generation_expression
                 FROM information_schema.columns
                 WHERE table_schema = {} AND table_name = {}
                 ORDER BY ordinal_position
@@ -145,6 +152,8 @@ async def postgres_get_object_details(
                         "data_type": r.cells["data_type"],
                         "is_nullable": r.cells["is_nullable"],
                         "default": r.cells["column_default"],
+                        "is_generated": r.cells["is_generated"],
+                        "generation_expression": r.cells["generation_expression"],
                     }
                     for r in col_rows
                 ]
@@ -165,6 +174,23 @@ async def postgres_get_object_details(
                 [schema_name, object_name],
             )
 
+            has_conenforced = await has_view_column(sql_driver, "pg_catalog", "pg_constraint", "conenforced")
+            con_meta_rows = await SafeSqlDriver.execute_param_query(
+                sql_driver,
+                f"""
+                SELECT
+                    con.conname AS constraint_name,
+                    con.convalidated AS is_validated,
+                    {"con.conenforced AS is_enforced" if has_conenforced else "TRUE AS is_enforced"}
+                FROM pg_catalog.pg_constraint con
+                INNER JOIN pg_catalog.pg_class rel ON rel.oid = con.conrelid
+                INNER JOIN pg_catalog.pg_namespace nsp ON nsp.oid = rel.relnamespace
+                WHERE nsp.nspname = {{}} AND rel.relname = {{}}
+                """,
+                [schema_name, object_name],
+            )
+            con_meta_by_name = {r.cells["constraint_name"]: r.cells for r in con_meta_rows} if con_meta_rows else {}
+
             constraints: dict[str, dict[str, object]] = {}
             if con_rows:
                 for row in con_rows:
@@ -177,6 +203,12 @@ async def postgres_get_object_details(
                     if col:
                         cols_list: list[object] = constraints[cname]["columns"]  # type: ignore[assignment]
                         cols_list.append(col)
+
+                    meta = con_meta_by_name.get(cname)
+                    if meta is not None:
+                        constraints[cname]["is_validated"] = meta["is_validated"]
+                        if has_conenforced:
+                            constraints[cname]["is_enforced"] = meta["is_enforced"]
 
             constraints_list = [{"name": name, **data} for name, data in constraints.items()]
 

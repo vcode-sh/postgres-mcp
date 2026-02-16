@@ -213,7 +213,7 @@ All tools are exposed via the [MCP tools protocol](https://modelcontextprotocol.
 | `postgres_get_top_queries` | Find the slowest or most resource-heavy queries (via `pg_stat_statements`). |
 | `postgres_analyze_workload_indexes` | Analyze your workload and recommend optimal indexes. |
 | `postgres_analyze_query_indexes` | Analyze specific queries (up to 10) and recommend indexes. |
-| `postgres_analyze_db_health` | Run health checks: index health, connections, vacuum, replication, cache, constraints, sequences. |
+| `postgres_analyze_db_health` | Run health checks: index health, connections, vacuum, replication, cache, constraints, sequences, checkpoints. |
 
 ## Advanced Setup
 
@@ -277,7 +277,9 @@ LLMs are great at reasoning and language, but they can be slow, expensive, and i
 
 **What Postgres versions are supported?**
 
-Tested with Postgres 12, 15, 16, and 17. Targeting support for versions 13 through 17.
+Tested with Postgres 12, 15, 16, 17, and 18.
+
+In `restricted` mode, SQL validation uses `pglast` parser grammar compatibility (currently PostgreSQL 17.x). Most read-only PG18 queries work, but some PG18-only grammar features can be rejected until parser support catches up.
 
 **Is it safe to use on production?**
 
@@ -328,7 +330,7 @@ uv run postgres-mcp "postgresql://user:password@localhost:5432/dbname"
 # Unit tests only
 uv run pytest tests/unit/ -v
 
-# All tests (requires Docker for integration tests with PG 12, 15, 16)
+# All tests (requires Docker for integration tests with PG 12, 15, 16, 17, 18)
 uv run pytest -v --log-cli-level=INFO
 ```
 

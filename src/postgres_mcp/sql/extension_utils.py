@@ -4,14 +4,12 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
+from .pg_compat import get_server_info
+from .pg_compat import reset_pg_compat_cache
 from .safe_sql import SafeSqlDriver
 from .sql_driver import SqlDriver
 
 logger = logging.getLogger(__name__)
-
-# Single global PostgreSQL version cache
-# TODO: If we support multiple connections in the future, this should be connection-specific
-_POSTGRES_VERSION = None
 
 
 @dataclass
@@ -27,8 +25,7 @@ class ExtensionStatus:
 
 def reset_postgres_version_cache() -> None:
     """Reset the PostgreSQL version cache. Primarily used for testing."""
-    global _POSTGRES_VERSION
-    _POSTGRES_VERSION = None
+    reset_pg_compat_cache()
 
 
 async def get_postgres_version(sql_driver: SqlDriver) -> int:
@@ -42,26 +39,8 @@ async def get_postgres_version(sql_driver: SqlDriver) -> int:
         The major PostgreSQL version as an integer (e.g., 16 for PostgreSQL 16.2)
         Returns 0 if the version cannot be determined
     """
-    # Check if we have a cached version
-    global _POSTGRES_VERSION
-    if _POSTGRES_VERSION is not None:
-        return _POSTGRES_VERSION
-
     try:
-        rows = await sql_driver.execute_query("SHOW server_version")
-        if not rows:
-            logger.warning("Could not determine PostgreSQL version")
-            return 0
-
-        version_string = rows[0].cells["server_version"]
-        # Extract the major version (before the first dot)
-        major_version = version_string.split(".")[0]
-        version = int(major_version)
-
-        # Cache the version globally
-        _POSTGRES_VERSION = version
-
-        return version
+        return (await get_server_info(sql_driver)).major
     except Exception as e:
         raise ValueError("Error determining PostgreSQL version") from e
 

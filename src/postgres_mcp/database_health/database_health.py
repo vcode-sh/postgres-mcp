@@ -7,6 +7,7 @@ from typing import List
 import mcp.types as types
 
 from .buffer_health_calc import BufferHealthCalc
+from .checkpoint_health_calc import CheckpointHealthCalc
 from .connection_health_calc import ConnectionHealthCalc
 from .constraint_health_calc import ConstraintHealthCalc
 from .index_health_calc import IndexHealthCalc
@@ -27,6 +28,7 @@ class HealthType(str, Enum):
     REPLICATION = "replication"
     BUFFER = "buffer"
     CONSTRAINT = "constraint"
+    CHECKPOINT = "checkpoint"
     ALL = "all"
 
 
@@ -41,7 +43,7 @@ class DatabaseHealthTool:
 
         Args:
             health_type: Comma-separated list of health check types to perform
-                         Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, all
+                         Valid values: index, connection, vacuum, sequence, replication, buffer, constraint, checkpoint, all
 
         Returns:
             A string with the health check results
@@ -91,6 +93,10 @@ class DatabaseHealthTool:
             if HealthType.CONSTRAINT in health_types:
                 constraint_health = ConstraintHealthCalc(self.sql_driver)
                 result += "Constraint health: " + await constraint_health.invalid_constraints_check() + "\n"
+
+            if HealthType.CHECKPOINT in health_types:
+                checkpoint_health = CheckpointHealthCalc(self.sql_driver)
+                result += "Checkpoint health: " + await checkpoint_health.checkpoint_health_check() + "\n"
 
             return result if result else "No health checks were performed."
         except Exception as e:

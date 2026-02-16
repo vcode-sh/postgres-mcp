@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from ..sql import SqlDriver
+from ..sql import has_view_column
 
 
 @dataclass
@@ -10,6 +11,8 @@ class ConstraintMetrics:
     name: str
     referenced_schema: str | None
     referenced_table: str | None
+    validated: bool
+    enforced: bool
 
 
 class ConstraintHealthCalc:
@@ -17,7 +20,7 @@ class ConstraintHealthCalc:
         self.sql_driver = sql_driver
 
     async def invalid_constraints_check(self) -> str:
-        """Check for any invalid constraints in the database.
+        """Check for invalid and, when available, not-enforced constraints.
 
         Returns:
             String describing any invalid constraints found
@@ -25,28 +28,42 @@ class ConstraintHealthCalc:
         metrics = await self._get_invalid_constraints()
 
         if not metrics:
-            return "No invalid constraints found."
+            return "No invalid or not-enforced constraints found."
 
-        result = ["Invalid constraints found:"]
+        result = ["Constraint issues found:"]
         for metric in metrics:
+            if not metric.validated and not metric.enforced:
+                issue = "is invalid and not enforced"
+            elif not metric.validated:
+                issue = "is invalid"
+            else:
+                issue = "is not enforced"
+
             if metric.referenced_table:
                 result.append(
                     f"Constraint '{metric.name}' on table '{metric.schema}.{metric.table}' "
-                    f"referencing '{metric.referenced_schema}.{metric.referenced_table}' is invalid"
+                    f"referencing '{metric.referenced_schema}.{metric.referenced_table}' {issue}"
                 )
             else:
-                result.append(f"Constraint '{metric.name}' on table '{metric.schema}.{metric.table}' is invalid")
+                result.append(f"Constraint '{metric.name}' on table '{metric.schema}.{metric.table}' {issue}")
         return "\n".join(result)
 
     async def _get_invalid_constraints(self) -> list[ConstraintMetrics]:
-        """Get all invalid constraints in the database."""
-        results = await self.sql_driver.execute_query("""
+        """Get all invalid (and optionally not-enforced) constraints in the database."""
+        has_conenforced = await has_view_column(self.sql_driver, "pg_catalog", "pg_constraint", "conenforced")
+        where_clause = "con.convalidated = false"
+        if has_conenforced:
+            where_clause = f"({where_clause} OR con.conenforced = false)"
+
+        results = await self.sql_driver.execute_query(f"""
             SELECT
                 nsp.nspname AS schema,
                 rel.relname AS table,
                 con.conname AS name,
                 fnsp.nspname AS referenced_schema,
-                frel.relname AS referenced_table
+                frel.relname AS referenced_table,
+                con.convalidated AS validated,
+                {"con.conenforced AS enforced" if has_conenforced else "TRUE AS enforced"}
             FROM
                 pg_catalog.pg_constraint con
             INNER JOIN
@@ -58,7 +75,7 @@ class ConstraintHealthCalc:
             LEFT JOIN
                 pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
             WHERE
-                con.convalidated = 'f'
+                {where_clause}
         """)
 
         if not results:
@@ -73,6 +90,8 @@ class ConstraintHealthCalc:
                 name=row["name"],
                 referenced_schema=row["referenced_schema"],
                 referenced_table=row["referenced_table"],
+                validated=row["validated"],
+                enforced=row["enforced"],
             )
             for row in result_list
         ]

@@ -77,6 +77,38 @@ async def test_explain_query_with_analyze_integration():
             first_content = result.content[0]
             assert isinstance(first_content, TextContent)
             assert result_text in first_content.text
+            mock_tool.return_value.explain_analyze.assert_awaited_once_with(
+                "SELECT * FROM users",
+                include_memory=False,
+                serialize=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_explain_query_with_analyze_memory_and_serialize_integration():
+    """Test serialize/include_memory pass-through for analyze mode."""
+    result_text = json.dumps({"Plan": {"Node Type": "Seq Scan"}, "Execution Time": 1.23})
+    artifact = _make_explain_mock(result_text)
+
+    with patch("postgres_mcp.tools.query_tools.get_sql_driver", new_callable=AsyncMock):
+        with patch("postgres_mcp.tools.query_tools.ExplainPlanTool") as mock_tool:
+            mock_tool.return_value.explain_analyze = AsyncMock(return_value=artifact)
+            result = await explain_query(
+                "SELECT * FROM users",
+                analyze=True,
+                include_memory=True,
+                serialize="binary",
+                hypothetical_indexes=[],
+            )
+
+            from mcp.types import CallToolResult
+
+            assert isinstance(result, CallToolResult)
+            mock_tool.return_value.explain_analyze.assert_awaited_once_with(
+                "SELECT * FROM users",
+                include_memory=True,
+                serialize="binary",
+            )
 
 
 @pytest.mark.asyncio
@@ -131,6 +163,57 @@ async def test_explain_query_missing_hypopg_integration():
                 first_content = result.content[0]
                 assert isinstance(first_content, TextContent)
                 assert missing_ext_message in first_content.text
+
+
+@pytest.mark.asyncio
+async def test_explain_query_serialize_requires_analyze():
+    """Serialize requires analyze=True."""
+    result = await explain_query("SELECT 1", serialize="text")
+
+    from mcp.types import CallToolResult
+    from mcp.types import TextContent
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    first_content = result.content[0]
+    assert isinstance(first_content, TextContent)
+    assert "SERIALIZE requires analyze=True" in first_content.text
+
+
+@pytest.mark.asyncio
+async def test_explain_query_serialize_mode_validation():
+    """Serialize accepts only text/binary."""
+    result = await explain_query("SELECT 1", analyze=True, serialize="json")
+
+    from mcp.types import CallToolResult
+    from mcp.types import TextContent
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    first_content = result.content[0]
+    assert isinstance(first_content, TextContent)
+    assert "SERIALIZE must be either 'text' or 'binary'" in first_content.text
+
+
+@pytest.mark.asyncio
+async def test_explain_query_serialize_with_hypothetical_indexes_rejected():
+    """Serialize cannot be used with hypothetical indexes."""
+    test_indexes = [{"table": "users", "columns": ["email"]}]
+    result = await explain_query(
+        "SELECT * FROM users",
+        analyze=True,
+        serialize="text",
+        hypothetical_indexes=test_indexes,
+    )
+
+    from mcp.types import CallToolResult
+    from mcp.types import TextContent
+
+    assert isinstance(result, CallToolResult)
+    assert result.isError is True
+    first_content = result.content[0]
+    assert isinstance(first_content, TextContent)
+    assert "Cannot use analyze and hypothetical indexes together" in first_content.text
 
 
 @pytest.mark.asyncio

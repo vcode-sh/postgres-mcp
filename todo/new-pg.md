@@ -2,6 +2,111 @@
 
 **Status:** Updated after full repository audit and external research on **February 16, 2026**.
 
+## Progress Tracker
+
+- [x] Phase 0: Compatibility foundation (`pg_compat`) + version refactor
+- [x] Phase 1: Core compatibility fixes (matrix + PG12 index stats bug)
+- [x] Phase 2: Top queries extensions (PG17/18 columns)
+- [x] Phase 3: EXPLAIN extensions (MEMORY / SERIALIZE)
+- [x] Phase 4: Health checks expansion
+- [x] Phase 5: SafeSql + parser compatibility
+- [x] Phase 6: Schema inspection enhancements
+- [x] Phase 7: Index intelligence (skip-scan awareness)
+
+### Execution Log
+
+- **Phase 0 done (2026-02-16):**
+  - Added `src/postgres_mcp/sql/pg_compat.py` (server info cache, capability checks, shared `pg_stat_statements` column mapping).
+  - Refactored version lookup to use shared compatibility layer.
+  - Fixed mock-driver infinite unwrap loop in compatibility helper.
+- **Phase 1 done (2026-02-16):**
+  - Fixed PG12 `pg_stat_statements` query bug in `src/postgres_mcp/index/index_opt_base.py`.
+  - Expanded test matrix in `tests/conftest.py` to include `postgres:17` and `postgres:18`.
+- **Phase 2 done (2026-02-16):**
+  - Extended top-queries resource output with PG17/PG18 optional metrics.
+  - Updated `tests/unit/top_queries/test_top_queries_calc.py`.
+  - Added `tests/unit/sql/test_pg_compat.py`.
+- **Phase 3 done (2026-02-16):**
+  - Added `include_memory` and `serialize` support to `postgres_explain_query` and `ExplainPlanTool`.
+  - Added PostgreSQL 17+ gating and validation errors for unsupported EXPLAIN options.
+  - Added tolerance coverage for additional PG18 EXPLAIN plan keys in `tests/unit/explain/test_explain_plan.py`.
+  - Added unit/integration coverage in:
+    - `tests/unit/explain/test_explain_plan.py`
+    - `tests/unit/explain/test_server_integration.py`
+  - Fixed a positional-argument regression in `src/postgres_mcp/index/index_opt_base.py` caused by the new EXPLAIN helper signature.
+- **Phase 4 done (2026-02-16):**
+  - Enhanced replication slot reporting with PG17+ optional fields (`invalidation_reason`, `inactive_since`, `failover`, `synced`) in `src/postgres_mcp/database_health/replication_calc.py`.
+  - Added idle-in-transaction wait-event diagnostics (when `pg_wait_events` is available) in `src/postgres_mcp/database_health/connection_health_calc.py`.
+  - Added PG18 vacuum/analyze timing totals in `src/postgres_mcp/database_health/vacuum_health_calc.py`.
+  - Updated constraint health logic to account for PG18 `conenforced` and report both invalid and not-enforced constraints in `src/postgres_mcp/database_health/constraint_health_calc.py`.
+  - Added new `src/postgres_mcp/database_health/checkpoint_health_calc.py` and wired `checkpoint` into `HealthType` and `DatabaseHealthTool`.
+  - Added unit coverage:
+    - `tests/unit/database_health/test_checkpoint_health_calc.py`
+    - `tests/unit/database_health/test_connection_health_calc.py`
+    - `tests/unit/database_health/test_constraint_health_calc.py`
+    - `tests/unit/database_health/test_replication_calc.py`
+    - `tests/unit/database_health/test_vacuum_health_calc.py`
+  - Updated integration assertion in `tests/unit/database_health/test_database_health_tool.py`.
+- **Phase 5 done (2026-02-16):**
+  - Extended restricted-mode SQL AST allowlist for SQL/JSON constructs used in PostgreSQL 17 (`JsonFuncExpr`, `JsonTable`, and related node types).
+  - Added conservative read-safe function whitelist entries:
+    - UUID: `uuidv4`, `uuidv7`, `uuid_extract_timestamp`, `uuid_extract_version`
+    - Array: `array_sort`, `array_reverse`
+    - String/hash: `casefold`, `crc32`, `crc32c`
+  - Improved parser failure messaging to explicitly mention parser grammar version limits in restricted mode.
+  - Added/updated tests in `tests/unit/sql/test_safe_sql.py`:
+    - SQL/JSON acceptance (`JSON_EXISTS`, `JSON_TABLE`)
+    - parser limitation messaging for PG18 grammar
+    - new whitelist entries coverage
+- **Phase 6 done (2026-02-16):**
+  - Extended schema column metadata in `src/postgres_mcp/tools/schema_tools.py` with:
+    - `is_generated`
+    - `generation_expression`
+  - Added constraint metadata enrichment with:
+    - `is_validated` (all supported versions)
+    - `is_enforced` (when `pg_constraint.conenforced` is available)
+  - Added targeted tests in `tests/unit/test_schema_tools.py`.
+- **Phase 7 done (2026-02-16):**
+  - Added PostgreSQL 18 skip-scan awareness in `src/postgres_mcp/index/dta_calc.py`:
+    - candidate annotations when an existing multicolumn B-tree index may cover the recommendation via skip scan.
+  - Preserved candidate metadata through recommendation generation.
+  - Added low-confidence/low-priority warning rendering for skip-scan candidates in `src/postgres_mcp/index/presentation.py`.
+  - Added coverage in `tests/unit/index/test_skip_scan_awareness.py`.
+- **Additional rollout completion (2026-02-16):**
+  - Added CI compatibility smoke matrix in `.github/workflows/build.yml` for `postgres:12`, `postgres:16`, `postgres:17`, `postgres:18`.
+  - Added `POSTGRES_TEST_IMAGE` override support in `tests/conftest.py` to run single-version smoke jobs.
+  - Updated `README.md` version support notes and health-check tool description.
+- **Validation after phases 0-2:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `170 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+- **Validation after phase 3:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/explain -q` -> `32 passed, 35 skipped`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `178 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+- **Validation after phase 4:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/database_health -q` -> `18 passed, 5 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `189 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+- **Validation after phase 5:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/sql/test_safe_sql.py -q` -> `64 passed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `193 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+- **Validation after phase 6:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/test_schema_tools.py -q` -> `2 passed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `195 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+- **Validation after phase 7 + rollout completion:**
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/index -q` -> `36 passed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit -q` -> `199 passed, 40 skipped, 1 xfailed`
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run ruff check .` -> passed
+  - `UV_CACHE_DIR=/tmp/uv-cache uv run pyright` -> `0 errors`
+  - `POSTGRES_TEST_IMAGE=postgres:17 UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/unit/explain/test_explain_plan_real_db.py -q` -> `7 skipped` (Docker not available in this environment)
+
 ## 1. Audit Snapshot (Current Codebase)
 
 ### 1.1 Verified project state

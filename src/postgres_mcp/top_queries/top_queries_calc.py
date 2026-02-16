@@ -1,5 +1,4 @@
 import logging
-from dataclasses import dataclass
 from typing import Literal
 from typing import LiteralString
 from typing import Union
@@ -7,8 +6,8 @@ from typing import cast
 
 from ..sql import SafeSqlDriver
 from ..sql import SqlDriver
+from ..sql import get_pg_stat_statements_columns
 from ..sql.extension_utils import check_extension
-from ..sql.extension_utils import get_postgres_version
 
 logger = logging.getLogger(__name__)
 
@@ -28,56 +27,6 @@ install_pg_stat_statements_message = (
     "monitoring. It adds overhead by tracking statistics, "
     "but this is usually negligible unless under extreme load."
 )
-
-
-@dataclass
-class PgStatStatementsColumns:
-    """Column names for pg_stat_statements view, which vary by PostgreSQL version."""
-
-    total_time: str
-    mean_time: str
-    stddev_time: str
-    wal_bytes_select: str  # Full SELECT expression (handles missing column in PG12)
-    wal_bytes_frac: str  # Full fraction expression
-
-
-def _get_pg_stat_statements_columns(pg_version: int) -> PgStatStatementsColumns:
-    """Get pg_stat_statements column names based on PostgreSQL version.
-
-    PostgreSQL 13 introduced pg_stat_statements v2.0 with breaking changes:
-    - Renamed timing columns: *_time → *_exec_time (total_time → total_exec_time, etc.)
-    - Added wal_bytes column for write-ahead log tracking
-
-    This function provides version-appropriate column names to ensure compatibility
-    with both old (PG ≤ 12) and new (PG ≥ 13) versions.
-
-    See: https://www.postgresql.org/docs/13/release-13.html#id-1.11.6.11.4
-
-    Args:
-        pg_version: PostgreSQL major version number
-
-    Returns:
-        PgStatStatementsColumns with version-appropriate column names
-    """
-    if pg_version >= 13:
-        # PostgreSQL 13+ with pg_stat_statements v2.0
-        return PgStatStatementsColumns(
-            total_time="total_exec_time",
-            mean_time="mean_exec_time",
-            stddev_time="stddev_exec_time",
-            wal_bytes_select="wal_bytes",
-            wal_bytes_frac="wal_bytes / NULLIF(SUM(wal_bytes) OVER (), 0) AS total_wal_bytes_frac",
-        )
-
-    # PostgreSQL 12 and older with pg_stat_statements v1.x
-    return PgStatStatementsColumns(
-        total_time="total_time",
-        mean_time="mean_time",
-        stddev_time="stddev_time",
-        wal_bytes_select="0 AS wal_bytes",  # Column doesn't exist in PG12
-        wal_bytes_frac="0 AS total_wal_bytes_frac",
-    )
-
 
 class TopQueriesCalc:
     """Tool for retrieving the slowest SQL queries."""
@@ -109,10 +58,7 @@ class TopQueriesCalc:
                 # Return installation instructions if the extension is not installed
                 return install_pg_stat_statements_message
 
-            # Get version-appropriate column names
-            pg_version = await get_postgres_version(self.sql_driver)
-            logger.debug(f"PostgreSQL version: {pg_version}")
-            cols = _get_pg_stat_statements_columns(pg_version)
+            cols = await get_pg_stat_statements_columns(self.sql_driver)
 
             # Determine which column to sort by based on sort_by parameter
             order_by_column = cols.total_time if sort_by == "total" else cols.mean_time
@@ -176,10 +122,7 @@ class TopQueriesCalc:
                 # Return installation instructions if the extension is not installed
                 return install_pg_stat_statements_message
 
-            # Get version-appropriate column names
-            pg_version = await get_postgres_version(self.sql_driver)
-            logger.debug(f"PostgreSQL version: {pg_version}")
-            cols = _get_pg_stat_statements_columns(pg_version)
+            cols = await get_pg_stat_statements_columns(self.sql_driver)
 
             query = cast(
                 LiteralString,
@@ -196,6 +139,13 @@ class TopQueriesCalc:
                         shared_blks_read,
                         shared_blks_dirtied,
                         {cols.wal_bytes_select},
+                        {cols.stats_since_select},
+                        {cols.minmax_stats_since_select},
+                        {cols.local_blk_read_time_select},
+                        {cols.local_blk_write_time_select},
+                        {cols.parallel_workers_to_launch_select},
+                        {cols.parallel_workers_launched_select},
+                        {cols.wal_buffers_full_select},
                         {cols.total_time} / NULLIF(SUM({cols.total_time}) OVER (), 0)
                             AS total_exec_time_frac,
                         (shared_blks_hit + shared_blks_read)
@@ -223,7 +173,14 @@ class TopQueriesCalc:
                     shared_blks_hit,
                     shared_blks_read,
                     shared_blks_dirtied,
-                    wal_bytes
+                    wal_bytes,
+                    stats_since,
+                    minmax_stats_since,
+                    local_blk_read_time,
+                    local_blk_write_time,
+                    parallel_workers_to_launch,
+                    parallel_workers_launched,
+                    wal_buffers_full
                 FROM resource_fractions
                 WHERE
                     total_exec_time_frac > {frac_threshold}

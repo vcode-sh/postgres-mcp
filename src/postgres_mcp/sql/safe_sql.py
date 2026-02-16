@@ -39,6 +39,12 @@ from pglast.ast import GroupingFunc
 from pglast.ast import GroupingSet
 from pglast.ast import Integer
 from pglast.ast import JoinExpr
+from pglast.ast import JsonFormat
+from pglast.ast import JsonFuncExpr
+from pglast.ast import JsonTable
+from pglast.ast import JsonTableColumn
+from pglast.ast import JsonTablePathSpec
+from pglast.ast import JsonValueExpr
 from pglast.ast import MinMaxExpr
 from pglast.ast import NamedArgExpr
 from pglast.ast import Node
@@ -211,8 +217,10 @@ class SafeSqlDriver(SqlDriver):
         "array_prepend",
         "array_remove",
         "array_replace",
+        "array_reverse",
         "array_sample",
         "array_shuffle",
+        "array_sort",
         "array_to_string",
         "array_upper",
         "cardinality",
@@ -225,6 +233,7 @@ class SafeSqlDriver(SqlDriver):
         "bit_length",
         "btrim",
         "char_length",
+        "casefold",
         "character_length",
         "chr",
         "concat",
@@ -617,6 +626,10 @@ class SafeSqlDriver(SqlDriver):
         "width",
         # UUID Functions
         "gen_random_uuid",
+        "uuid_extract_timestamp",
+        "uuid_extract_version",
+        "uuidv4",
+        "uuidv7",
         # Enum Functions
         "enum_first",
         "enum_last",
@@ -636,6 +649,8 @@ class SafeSqlDriver(SqlDriver):
         "encrypt",
         "gen_salt",
         "crypt",
+        "crc32",
+        "crc32c",
         # earthdistance/cube Functions
         "earth_distance",
         "earth_box",
@@ -704,6 +719,9 @@ class SafeSqlDriver(SqlDriver):
         SQLValueFunction,
         # Function calls and type casting
         FuncCall,
+        JsonFormat,
+        JsonFuncExpr,
+        JsonValueExpr,
         TypeCast,
         DefElem,
         TypeName,
@@ -723,6 +741,9 @@ class SafeSqlDriver(SqlDriver):
         TableFunc,
         RangeTableFunc,
         RangeTableFuncCol,
+        JsonTable,
+        JsonTableColumn,
+        JsonTablePathSpec,
         # Array access
         A_Indirection,
         A_Indices,
@@ -975,7 +996,11 @@ class SafeSqlDriver(SqlDriver):
                 raise ValueError(f"Error validating query: {query}") from e
 
         except pglast.parser.ParseError as e:
-            raise ValueError("Failed to parse SQL statement") from e
+            parser_version = ".".join(str(part) for part in pglast.parser.get_postgresql_version())
+            raise ValueError(
+                "Failed to parse SQL statement. Restricted mode uses pglast parser "
+                f"for PostgreSQL {parser_version} grammar; newer PostgreSQL syntax may be unsupported."
+            ) from e
 
     async def execute_query(
         self,

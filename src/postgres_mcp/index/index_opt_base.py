@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
 from typing import Iterable
+from typing import LiteralString
+from typing import cast
 
 from pglast import parse_sql
 from pglast.ast import SelectStmt
@@ -19,6 +21,7 @@ from ..sql import SqlBindParams
 from ..sql import SqlDriver
 from ..sql import TableAliasVisitor
 from ..sql import check_hypopg_installation_status
+from ..sql import get_pg_stat_statements_columns
 
 logger = logging.getLogger(__name__)
 
@@ -382,7 +385,12 @@ class IndexTuningBase(ABC):
 
         # Generate the plan using the static method
         explain_plan_tool = ExplainPlanTool(self.sql_driver)
-        plan = await explain_plan_tool.generate_explain_plan_with_hypothetical_indexes(query_text, indexes, False, self)
+        plan = await explain_plan_tool.generate_explain_plan_with_hypothetical_indexes(
+            query_text,
+            indexes,
+            use_generic_plan=False,
+            dta=self,
+        )
 
         # Cache the result
         self._explain_plans_cache[cache_key] = plan
@@ -418,17 +426,18 @@ class IndexTuningBase(ABC):
 
     async def _get_query_stats_direct(self, min_calls: int = 50, min_avg_time_ms: float = 5.0, limit: int = 100) -> list[dict[str, Any]]:
         """Direct implementation of query stats collection."""
-        query = """
-        SELECT queryid, query, calls, total_exec_time/calls as avg_exec_time
+        cols = await get_pg_stat_statements_columns(self.sql_driver)
+        query = f"""
+        SELECT queryid, query, calls, {cols.total_time}/calls as avg_exec_time
         FROM pg_stat_statements
-        WHERE calls >= {}
-        AND total_exec_time/calls >= {}
-        ORDER BY total_exec_time DESC
-        LIMIT {}
+        WHERE calls >= {{}}
+        AND {cols.total_time}/calls >= {{}}
+        ORDER BY {cols.total_time} DESC
+        LIMIT {{}}
         """
         result = await SafeSqlDriver.execute_param_query(
             self.sql_driver,
-            query,
+            cast(LiteralString, query),
             [min_calls, min_avg_time_ms, limit],
         )
         return [dict(row.cells) for row in result] if result else []

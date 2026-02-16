@@ -14,6 +14,7 @@ from ..sql import ColumnCollector
 from ..sql import SafeSqlDriver
 from ..sql import SqlDriver
 from ..sql import TableAliasVisitor
+from ..sql import get_server_info
 from .index_opt_base import IndexRecommendation
 from .index_opt_base import IndexTuningBase
 from .index_opt_base import candidate_str
@@ -70,12 +71,14 @@ class DatabaseTuningAdvisor(IndexTuningBase):
         """Generate index recommendations using a hybrid 'seed + greedy' approach with a time cutoff."""
 
         # Get existing indexes
-        existing_index_defs: set[str] = {idx["definition"] for idx in await self._get_existing_indexes()}
+        existing_indexes = await self._get_existing_indexes()
+        existing_index_defs: set[str] = {idx["definition"] for idx in existing_indexes}
 
         logger.debug(f"Existing indexes ({len(existing_index_defs)}): {pp_list(list(existing_index_defs))}")
 
         # generate initial candidates
         all_candidates = await self.generate_candidates(query_weights, existing_index_defs)
+        all_candidates = await self._annotate_skip_scan_candidates(all_candidates, existing_indexes)
 
         self.dta_trace(f"All candidates ({len(all_candidates)}): {candidate_str(all_candidates)}")
 
@@ -104,16 +107,7 @@ class DatabaseTuningAdvisor(IndexTuningBase):
 
             self.dta_trace("Evaluating seed:")
             current_cost = await self._evaluate_configuration_cost(query_weights, frozenset(seed))
-            candidate_indexes = set(
-                {
-                    IndexRecommendation(
-                        c.table,
-                        tuple(c.columns),
-                        c.using,
-                    )
-                    for c in all_candidates
-                }
-            )
+            candidate_indexes = set(all_candidates)
             final_indexes, final_cost = await self._enumerate_greedy(query_weights, seed.copy(), current_cost, candidate_indexes - seed)
 
             if final_cost < best_config[1]:
@@ -380,6 +374,53 @@ class DatabaseTuningAdvisor(IndexTuningBase):
                 filtered_candidates.append(candidate)
 
         return filtered_candidates
+
+    async def _annotate_skip_scan_candidates(
+        self,
+        candidates: list[IndexRecommendation],
+        existing_indexes: list[dict[str, Any]],
+    ) -> list[IndexRecommendation]:
+        """Mark candidates that may be redundant on PostgreSQL 18+ due B-tree skip scan."""
+        if not candidates:
+            return candidates
+
+        server_info = await get_server_info(self.sql_driver)
+        if server_info.major < 18:
+            return candidates
+
+        parsed_existing_indexes_by_table: dict[str, list[dict[str, Any]]] = {}
+        from pglast import parser
+
+        for existing in existing_indexes:
+            definition = existing.get("definition")
+            if not isinstance(definition, str) or "CREATE INDEX" not in definition.upper():
+                continue
+            try:
+                parsed_stmt = parser.parse_sql(definition)[0].stmt
+                parsed_index = self._extract_index_info(parsed_stmt)
+            except Exception:
+                continue
+            if parsed_index is None:
+                continue
+            if parsed_index["type"] != "btree" or len(parsed_index["columns"]) < 2:
+                continue
+            table_name = parsed_index["table"]
+            parsed_existing_indexes_by_table.setdefault(table_name, []).append(parsed_index)
+
+        for candidate in candidates:
+            if candidate.potential_problematic_reason is not None:
+                continue
+            if candidate.using.lower() != "btree" or len(candidate.columns) != 1:
+                continue
+            table_name = candidate.table.lower()
+            candidate_column = candidate.columns[0].lower()
+            matching_indexes = [
+                idx for idx in parsed_existing_indexes_by_table.get(table_name, []) if candidate_column in idx["columns"][1:]
+            ]
+            if matching_indexes:
+                candidate.potential_problematic_reason = "pg18_skip_scan_redundant"
+
+        return candidates
 
     async def _filter_long_text_columns(self, candidates: list[IndexRecommendation], max_text_length: int = 100) -> list[IndexRecommendation]:
         """Filter out indexes that contain long text columns based on catalog information.

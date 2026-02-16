@@ -89,6 +89,35 @@ async def test_explain_success(mock_sql_driver):
     assert json.loads(result.value) == plan_data
 
 
+def test_explain_plan_artifact_tolerates_additional_pg18_fields():
+    """Plan conversion should remain stable when PostgreSQL adds extra plan keys."""
+    plan_data = {
+        "Plan": {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Startup Cost": 0.00,
+            "Total Cost": 10.00,
+            "Plan Rows": 100,
+            "Plan Width": 20,
+            "Parallel Aware": False,
+            "WAL Records": 0,
+            "WAL FPI": 0,
+            "WAL Bytes": 0,
+            "Shared Hit Blocks": 5,
+            "Shared Read Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Peak Memory Usage": 128,
+        },
+        "Planning Time": 0.10,
+        "Execution Time": 1.00,
+    }
+
+    artifact = ExplainPlanArtifact.from_json_data(plan_data)
+    assert artifact.plan_tree.node_type == "Seq Scan"
+    assert artifact.plan_tree.shared_hit_blocks == 5
+    assert artifact.planning_time == 0.10
+
+
 @pytest.mark.asyncio
 async def test_explain_with_bind_variables(mock_sql_driver):
     """Test explain with bind variables."""
@@ -287,6 +316,91 @@ async def test_explain_analyze_success(mock_sql_driver):
     # Verify result is as expected
     assert isinstance(result, ExplainPlanArtifact)
     assert json.loads(result.value) == plan_data
+
+
+@pytest.mark.asyncio
+async def test_explain_memory_option_success(mock_sql_driver):
+    """Test EXPLAIN MEMORY support for PostgreSQL 17+."""
+    plan_data = {
+        "Plan": {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Startup Cost": 0.00,
+            "Total Cost": 10.00,
+            "Plan Rows": 100,
+            "Plan Width": 20,
+        }
+    }
+
+    def side_effect(query):
+        if query == "SHOW server_version_num":
+            return [MockCell({"server_version_num": "170001"})]
+        if "EXPLAIN" in query:
+            return [MockCell({"QUERY PLAN": [plan_data]})]
+        return None
+
+    mock_sql_driver.execute_query.side_effect = side_effect
+    tool = ExplainPlanTool(sql_driver=mock_sql_driver)
+    result = await tool.explain("SELECT * FROM users", include_memory=True)
+
+    assert isinstance(result, ExplainPlanArtifact)
+    explain_call = next(c[0][0] for c in mock_sql_driver.execute_query.call_args_list if "EXPLAIN" in c[0][0])
+    assert "MEMORY" in explain_call
+
+
+@pytest.mark.asyncio
+async def test_explain_memory_option_requires_pg17(mock_sql_driver):
+    """Test EXPLAIN MEMORY validation on unsupported versions."""
+    mock_sql_driver.execute_query.return_value = [MockCell({"server_version_num": "160009"})]
+    tool = ExplainPlanTool(sql_driver=mock_sql_driver)
+    result = await tool.explain("SELECT * FROM users", include_memory=True)
+    assert isinstance(result, ErrorResult)
+    assert "MEMORY option requires PostgreSQL 17 or later" in result.value
+
+
+@pytest.mark.asyncio
+async def test_explain_serialize_option_success(mock_sql_driver):
+    """Test EXPLAIN ANALYZE SERIALIZE support for PostgreSQL 17+."""
+    plan_data = {
+        "Plan": {
+            "Node Type": "Seq Scan",
+            "Relation Name": "users",
+            "Startup Cost": 0.00,
+            "Total Cost": 10.00,
+            "Plan Rows": 100,
+            "Plan Width": 20,
+            "Actual Startup Time": 0.01,
+            "Actual Total Time": 1.23,
+            "Actual Rows": 95,
+            "Actual Loops": 1,
+        },
+        "Planning Time": 0.05,
+        "Execution Time": 1.30,
+    }
+
+    def side_effect(query):
+        if query == "SHOW server_version_num":
+            return [MockCell({"server_version_num": "170001"})]
+        if "EXPLAIN" in query:
+            return [MockCell({"QUERY PLAN": [plan_data]})]
+        return None
+
+    mock_sql_driver.execute_query.side_effect = side_effect
+    tool = ExplainPlanTool(sql_driver=mock_sql_driver)
+    result = await tool.explain_analyze("SELECT * FROM users", serialize="text")
+
+    assert isinstance(result, ExplainPlanArtifact)
+    explain_call = next(c[0][0] for c in mock_sql_driver.execute_query.call_args_list if "EXPLAIN" in c[0][0])
+    assert "SERIALIZE TEXT" in explain_call
+
+
+@pytest.mark.asyncio
+async def test_explain_serialize_requires_analyze(mock_sql_driver):
+    """Test EXPLAIN SERIALIZE validation when analyze=False."""
+    tool = ExplainPlanTool(sql_driver=mock_sql_driver)
+    result = await tool.explain("SELECT * FROM users", serialize="text")
+    assert isinstance(result, ErrorResult)
+    assert "SERIALIZE option requires analyze=True" in result.value
 
 
 @pytest.mark.asyncio

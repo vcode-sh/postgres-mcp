@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Generator
 
 import pytest
@@ -10,6 +11,11 @@ from postgres_mcp.sql import reset_postgres_version_cache
 load_dotenv()
 
 
+DEFAULT_TEST_POSTGRES_IMAGES = ["postgres:12", "postgres:15", "postgres:16", "postgres:17", "postgres:18"]
+TEST_POSTGRES_IMAGE = os.getenv("POSTGRES_TEST_IMAGE")
+TEST_POSTGRES_IMAGES = [TEST_POSTGRES_IMAGE] if TEST_POSTGRES_IMAGE else DEFAULT_TEST_POSTGRES_IMAGES
+
+
 # Define a custom event loop policy that handles cleanup better
 @pytest.fixture(scope="session")
 def event_loop_policy():
@@ -17,7 +23,7 @@ def event_loop_policy():
     return asyncio.DefaultEventLoopPolicy()
 
 
-@pytest.fixture(scope="class", params=["postgres:12", "postgres:15", "postgres:16"])
+@pytest.fixture(scope="class", params=TEST_POSTGRES_IMAGES)
 def test_postgres_connection_string(request) -> Generator[tuple[str, str], None, None]:
     yield from create_postgres_container(request.param)
 

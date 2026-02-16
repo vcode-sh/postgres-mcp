@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..sql import SqlDriver
+from ..sql import get_server_info
+from ..sql import has_view_column
 
 
 @dataclass
@@ -9,6 +11,10 @@ class ReplicationSlot:
     slot_name: str
     database: str
     active: bool
+    invalidation_reason: str | None = None
+    inactive_since: str | None = None
+    failover: bool | None = None
+    synced: bool | None = None
 
 
 @dataclass
@@ -59,12 +65,12 @@ class ReplicationCalc:
             if active_slots:
                 result.append("\nActive replication slots:")
                 for slot in active_slots:
-                    result.append(f"- {slot.slot_name} (database: {slot.database})")
+                    result.append(self._format_slot(slot))
 
             if inactive_slots:
                 result.append("\nInactive replication slots:")
                 for slot in inactive_slots:
-                    result.append(f"- {slot.slot_name} (database: {slot.database})")
+                    result.append(self._format_slot(slot))
         else:
             result.append("\nNo replication slots found.")
 
@@ -117,11 +123,40 @@ class ReplicationCalc:
             return []
 
         try:
-            result = await self.sql_driver.execute_query("""
+            supports_invalidation_reason = await has_view_column(
+                self.sql_driver,
+                "pg_catalog",
+                "pg_replication_slots",
+                "invalidation_reason",
+            )
+            supports_inactive_since = await has_view_column(
+                self.sql_driver,
+                "pg_catalog",
+                "pg_replication_slots",
+                "inactive_since",
+            )
+            supports_failover = await has_view_column(
+                self.sql_driver,
+                "pg_catalog",
+                "pg_replication_slots",
+                "failover",
+            )
+            supports_synced = await has_view_column(
+                self.sql_driver,
+                "pg_catalog",
+                "pg_replication_slots",
+                "synced",
+            )
+
+            result = await self.sql_driver.execute_query(f"""
                 SELECT
                     slot_name,
                     database,
-                    active
+                    active,
+                    {"invalidation_reason AS invalidation_reason" if supports_invalidation_reason else "NULL::text AS invalidation_reason"},
+                    {"inactive_since::text AS inactive_since" if supports_inactive_since else "NULL::text AS inactive_since"},
+                    {"failover AS failover" if supports_failover else "NULL::boolean AS failover"},
+                    {"synced AS synced" if supports_synced else "NULL::boolean AS synced"}
                 FROM pg_replication_slots
             """)
             if result is None:
@@ -132,12 +167,29 @@ class ReplicationCalc:
                     slot_name=row["slot_name"],
                     database=row["database"],
                     active=row["active"],
+                    invalidation_reason=row["invalidation_reason"],
+                    inactive_since=row["inactive_since"],
+                    failover=row["failover"],
+                    synced=row["synced"],
                 )
                 for row in result_list
             ]
         except Exception:
             self._feature_support["replication_slots"] = False
             return []
+
+    def _format_slot(self, slot: ReplicationSlot) -> str:
+        details: list[str] = []
+        if slot.failover is not None:
+            details.append(f"failover={slot.failover}")
+        if slot.synced is not None:
+            details.append(f"synced={slot.synced}")
+        if slot.inactive_since:
+            details.append(f"inactive_since={slot.inactive_since}")
+        if slot.invalidation_reason:
+            details.append(f"invalidation_reason={slot.invalidation_reason}")
+        detail_text = f" [{', '.join(details)}]" if details else ""
+        return f"- {slot.slot_name} (database: {slot.database}){detail_text}"
 
     async def _is_replicating(self) -> bool:
         """Check if replication is active."""
@@ -155,9 +207,7 @@ class ReplicationCalc:
     async def _get_server_version(self) -> int:
         """Get PostgreSQL server version as a number (e.g. 100000 for version 10.0)."""
         if self._server_version is None:
-            result = await self.sql_driver.execute_query("SHOW server_version_num")
-            result_list = [dict(x.cells) for x in result] if result is not None else []
-            self._server_version = int(result_list[0]["server_version_num"]) if result_list else 0
+            self._server_version = (await get_server_info(self.sql_driver)).server_version_num
         return self._server_version
 
     def _feature_supported(self, feature: str) -> bool:

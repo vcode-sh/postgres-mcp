@@ -758,3 +758,45 @@ async def test_query_with_whitespace(safe_driver, mock_sql_driver):
     """
     await safe_driver.execute_query(query)
     mock_sql_driver.execute_query.assert_awaited_once_with("/* crystaldba */ " + query, params=None, force_readonly=True)
+
+
+@pytest.mark.asyncio
+async def test_sql_json_exists_is_allowed(safe_driver, mock_sql_driver):
+    """PostgreSQL SQL/JSON function nodes should be accepted in restricted mode."""
+    query = "SELECT JSON_EXISTS('{\"a\":1}', '$.a')"
+    await safe_driver.execute_query(query)
+    mock_sql_driver.execute_query.assert_awaited_once_with("/* crystaldba */ " + query, params=None, force_readonly=True)
+
+
+@pytest.mark.asyncio
+async def test_sql_json_table_is_allowed(safe_driver, mock_sql_driver):
+    """JSON_TABLE syntax should pass AST validation for read-only SELECT usage."""
+    query = "SELECT * FROM JSON_TABLE('[1,2,3]', '$[*]' COLUMNS (value INT PATH '$')) AS jt"
+    await safe_driver.execute_query(query)
+    mock_sql_driver.execute_query.assert_awaited_once_with("/* crystaldba */ " + query, params=None, force_readonly=True)
+
+
+@pytest.mark.asyncio
+async def test_postgres18_parser_limitation_message_is_clear(safe_driver):
+    """PG18-only grammar should fail with a parser-version-aware message."""
+    query = "CREATE TABLE t (a int GENERATED ALWAYS AS (1) VIRTUAL)"
+    with pytest.raises(ValueError, match="Restricted mode uses pglast parser for PostgreSQL"):
+        await safe_driver.execute_query(query)
+
+
+@pytest.mark.asyncio
+async def test_new_readonly_function_whitelist_entries(safe_driver, mock_sql_driver):
+    """Recently added read-safe utility functions should pass validation."""
+    query = """
+    SELECT
+        uuidv7(),
+        uuid_extract_version(uuidv4()),
+        uuid_extract_timestamp(uuidv4()),
+        array_sort(ARRAY[3, 1, 2]),
+        array_reverse(ARRAY[1, 2, 3]),
+        casefold('AbC'),
+        crc32('abc'),
+        crc32c('abc')
+    """
+    await safe_driver.execute_query(query)
+    mock_sql_driver.execute_query.assert_awaited_once_with("/* crystaldba */ " + query, params=None, force_readonly=True)

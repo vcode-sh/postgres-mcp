@@ -13,6 +13,7 @@ from ..sql import IndexDefinition
 from ..sql import SafeSqlDriver
 from ..sql import SqlBindParams
 from ..sql import check_postgres_version_requirement
+from ..sql import get_postgres_version
 
 logger = logging.getLogger(__name__)
 
@@ -55,33 +56,52 @@ class ExplainPlanTool:
 
         return sql_query, use_generic_plan
 
-    async def explain(self, sql_query: str, do_analyze: bool = False) -> ExplainPlanArtifact | ErrorResult:
+    async def explain(
+        self,
+        sql_query: str,
+        do_analyze: bool = False,
+        include_memory: bool = False,
+        serialize: str | None = None,
+    ) -> ExplainPlanArtifact | ErrorResult:
         """
         Generate an EXPLAIN plan for a SQL query.
 
         Args:
             sql_query: The SQL query to explain
+            do_analyze: Run EXPLAIN ANALYZE
+            include_memory: Include EXPLAIN MEMORY output (PostgreSQL 17+)
+            serialize: Include EXPLAIN ANALYZE SERIALIZE mode (TEXT or BINARY, PostgreSQL 17+)
 
         Returns:
             ExplainPlanArtifact or ErrorResult
         """
         modified_sql_query, use_generic_plan = await self.replace_query_parameters_if_needed(sql_query)
-        return await self._run_explain_query(modified_sql_query, analyze=do_analyze, generic_plan=use_generic_plan)
+        return await self._run_explain_query(
+            modified_sql_query,
+            analyze=do_analyze,
+            generic_plan=use_generic_plan,
+            include_memory=include_memory,
+            serialize=serialize,
+        )
 
-    async def explain_analyze(self, sql_query: str) -> ExplainPlanArtifact | ErrorResult:
+    async def explain_analyze(
+        self, sql_query: str, include_memory: bool = False, serialize: str | None = None
+    ) -> ExplainPlanArtifact | ErrorResult:
         """
         Generate an EXPLAIN ANALYZE plan for a SQL query.
 
         Args:
             sql_query: The SQL query to explain and analyze
+            include_memory: Include EXPLAIN MEMORY output (PostgreSQL 17+)
+            serialize: Include EXPLAIN ANALYZE SERIALIZE mode (TEXT or BINARY, PostgreSQL 17+)
 
         Returns:
             ExplainPlanArtifact or ErrorResult
         """
-        return await self.explain(sql_query, do_analyze=True)
+        return await self.explain(sql_query, do_analyze=True, include_memory=include_memory, serialize=serialize)
 
     async def explain_with_hypothetical_indexes(
-        self, sql_query: str, hypothetical_indexes: list[dict[str, Any]]
+        self, sql_query: str, hypothetical_indexes: list[dict[str, Any]], include_memory: bool = False
     ) -> ExplainPlanArtifact | ErrorResult:
         """
         Generate an explain plan for a query as if certain indexes existed.
@@ -126,7 +146,12 @@ class ExplainPlanTool:
             modified_sql_query, use_generic_plan = await self.replace_query_parameters_if_needed(sql_query)
 
             # Generate the explain plan using the static method
-            plan_data = await self.generate_explain_plan_with_hypothetical_indexes(modified_sql_query, indexes, use_generic_plan)
+            plan_data = await self.generate_explain_plan_with_hypothetical_indexes(
+                modified_sql_query,
+                indexes,
+                use_generic_plan,
+                include_memory=include_memory,
+            )
 
             # Check if we got a valid plan
             if not plan_data or not isinstance(plan_data, dict) or "Plan" not in plan_data:
@@ -150,13 +175,35 @@ class ExplainPlanTool:
         """Check if a query contains LIKE expressions, which don't work with GENERIC_PLAN."""
         return bool(re.search(r"\bLIKE\b", query, re.IGNORECASE))
 
-    async def _run_explain_query(self, query: str, analyze: bool = False, generic_plan: bool = False) -> ExplainPlanArtifact | ErrorResult:
+    async def _run_explain_query(
+        self,
+        query: str,
+        analyze: bool = False,
+        generic_plan: bool = False,
+        include_memory: bool = False,
+        serialize: str | None = None,
+    ) -> ExplainPlanArtifact | ErrorResult:
         try:
             explain_options = ["FORMAT JSON"]
             if analyze:
                 explain_options.append("ANALYZE")
             if generic_plan:
                 explain_options.append("GENERIC_PLAN")
+            if serialize:
+                if not analyze:
+                    return ErrorResult("SERIALIZE option requires analyze=True")
+                serialize_mode = serialize.upper()
+                if serialize_mode not in {"TEXT", "BINARY"}:
+                    return ErrorResult("SERIALIZE option must be either 'text' or 'binary'")
+                pg_version = await get_postgres_version(self.sql_driver)
+                if pg_version < 17:
+                    return ErrorResult("SERIALIZE option requires PostgreSQL 17 or later")
+                explain_options.append(f"SERIALIZE {serialize_mode}")
+            if include_memory:
+                pg_version = await get_postgres_version(self.sql_driver)
+                if pg_version < 17:
+                    return ErrorResult("MEMORY option requires PostgreSQL 17 or later")
+                explain_options.append("MEMORY")
 
             explain_q = f"EXPLAIN ({', '.join(explain_options)}) {query}"
             logger.debug(f"RUNNING EXPLAIN QUERY: {explain_q}")
@@ -187,6 +234,7 @@ class ExplainPlanTool:
         query_text: str,
         indexes: frozenset[IndexDefinition],
         use_generic_plan: bool = False,
+        include_memory: bool = False,
         dta=None,
     ) -> dict[str, Any]:
         """
@@ -215,6 +263,11 @@ class ExplainPlanTool:
                 explain_options.append("GENERIC_PLAN")
             if indexes:
                 explain_options.append("COSTS TRUE")
+            if include_memory:
+                pg_version = await get_postgres_version(self.sql_driver)
+                if pg_version < 17:
+                    raise ValueError("MEMORY option requires PostgreSQL 17 or later")
+                explain_options.append("MEMORY")
 
             explain_plan_query = f"{create_indexes_query}EXPLAIN ({', '.join(explain_options)}) {query_text}"
             plan_result = await self.sql_driver.execute_query(explain_plan_query)  # type: ignore

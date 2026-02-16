@@ -174,6 +174,7 @@ async def test_database_health_all(local_sql_driver):
         assert "Buffer health for indexes:" in health_report
         assert "Buffer health for tables:" in health_report
         assert "Constraint health:" in health_report
+        assert "Checkpoint health:" in health_report
 
         # Verify specific health issues we know should be detected
         assert "idx_orders_customer_dup" in health_report  # Should detect duplicate index
