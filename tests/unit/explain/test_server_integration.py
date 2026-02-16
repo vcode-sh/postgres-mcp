@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 import pytest_asyncio
 
+from postgres_mcp.artifacts import ExplainPlanArtifact
 from postgres_mcp.server import explain_query
 
 
@@ -31,130 +32,123 @@ class MockCell:
         self.cells = data
 
 
+def _make_explain_mock(result_text: str) -> MagicMock:
+    """Create a mock ExplainPlanArtifact with the given text."""
+    artifact = MagicMock(spec=ExplainPlanArtifact)
+    artifact.to_text.return_value = result_text
+    return artifact
+
+
 @pytest.mark.asyncio
 async def test_explain_query_integration():
     """Test the entire explain_query tool end-to-end."""
-    # Mock response with format_text_response
     result_text = json.dumps({"Plan": {"Node Type": "Seq Scan"}})
-    mock_text_result = MagicMock()
-    mock_text_result.text = result_text
+    artifact = _make_explain_mock(result_text)
 
-    # Patch the format_text_response function
-    with patch("postgres_mcp.server.format_text_response", return_value=[mock_text_result]):
-        # Patch the get_sql_driver
-        with patch("postgres_mcp.server.get_sql_driver"):
-            # Patch the ExplainPlanTool
-            with patch("postgres_mcp.server.ExplainPlanTool"):
-                result = await explain_query("SELECT * FROM users", hypothetical_indexes=None)
+    with patch("postgres_mcp.tools.query_tools.get_sql_driver", new_callable=AsyncMock):
+        with patch("postgres_mcp.tools.query_tools.ExplainPlanTool") as mock_tool:
+            mock_tool.return_value.explain = AsyncMock(return_value=artifact)
+            result = await explain_query("SELECT * FROM users", analyze=False, hypothetical_indexes=[])
 
-                # Verify result matches our expected plan data
-                assert isinstance(result, list)
-                assert len(result) == 1
-                assert result[0].text == result_text
+            from mcp.types import CallToolResult
+            from mcp.types import TextContent
+
+            assert isinstance(result, CallToolResult)
+            first_content = result.content[0]
+            assert isinstance(first_content, TextContent)
+            assert result_text in first_content.text
 
 
 @pytest.mark.asyncio
 async def test_explain_query_with_analyze_integration():
     """Test the explain_query tool with analyze=True."""
-    # Mock response with format_text_response
     result_text = json.dumps({"Plan": {"Node Type": "Seq Scan"}, "Execution Time": 1.23})
-    mock_text_result = MagicMock()
-    mock_text_result.text = result_text
+    artifact = _make_explain_mock(result_text)
 
-    # Patch the format_text_response function
-    with patch("postgres_mcp.server.format_text_response", return_value=[mock_text_result]):
-        # Patch the get_sql_driver
-        with patch("postgres_mcp.server.get_sql_driver"):
-            # Patch the ExplainPlanTool
-            with patch("postgres_mcp.server.ExplainPlanTool"):
-                result = await explain_query("SELECT * FROM users", analyze=True, hypothetical_indexes=None)
+    with patch("postgres_mcp.tools.query_tools.get_sql_driver", new_callable=AsyncMock):
+        with patch("postgres_mcp.tools.query_tools.ExplainPlanTool") as mock_tool:
+            mock_tool.return_value.explain_analyze = AsyncMock(return_value=artifact)
+            result = await explain_query("SELECT * FROM users", analyze=True, hypothetical_indexes=[])
 
-                # Verify result matches our expected plan data
-                assert isinstance(result, list)
-                assert len(result) == 1
-                assert result[0].text == result_text
+            from mcp.types import CallToolResult
+            from mcp.types import TextContent
+
+            assert isinstance(result, CallToolResult)
+            first_content = result.content[0]
+            assert isinstance(first_content, TextContent)
+            assert result_text in first_content.text
 
 
 @pytest.mark.asyncio
 async def test_explain_query_with_hypothetical_indexes_integration():
     """Test the explain_query tool with hypothetical indexes."""
-    # Mock response with format_text_response
     result_text = json.dumps({"Plan": {"Node Type": "Index Scan"}})
-    mock_text_result = MagicMock()
-    mock_text_result.text = result_text
+    artifact = _make_explain_mock(result_text)
 
-    # Test data
     test_sql = "SELECT * FROM users WHERE email = 'test@example.com'"
     test_indexes = [{"table": "users", "columns": ["email"]}]
 
-    # Patch the format_text_response function
-    with patch("postgres_mcp.server.format_text_response", return_value=[mock_text_result]):
-        # Create mock SafeSqlDriver that returns extension exists
-        mock_safe_driver = MagicMock()
-        mock_execute_query = AsyncMock(return_value=[MockCell({"exists": 1})])
-        mock_safe_driver.execute_query = mock_execute_query
+    with patch("postgres_mcp.tools.query_tools.get_sql_driver", new_callable=AsyncMock):
+        with patch("postgres_mcp.tools.query_tools.ExplainPlanTool") as mock_tool:
+            mock_tool.return_value.explain_with_hypothetical_indexes = AsyncMock(return_value=artifact)
+            with patch(
+                "postgres_mcp.tools.query_tools.check_hypopg_installation_status",
+                new_callable=AsyncMock,
+                return_value=(True, ""),
+            ):
+                result = await explain_query(test_sql, analyze=False, hypothetical_indexes=test_indexes)
 
-        # Patch the get_sql_driver
-        with patch("postgres_mcp.server.get_sql_driver", return_value=mock_safe_driver):
-            # Patch the ExplainPlanTool
-            with patch("postgres_mcp.server.ExplainPlanTool"):
-                result = await explain_query(test_sql, hypothetical_indexes=test_indexes)
+                from mcp.types import CallToolResult
+                from mcp.types import TextContent
 
-                # Verify result matches our expected plan data
-                assert isinstance(result, list)
-                assert len(result) == 1
-                assert result[0].text == result_text
+                assert isinstance(result, CallToolResult)
+                first_content = result.content[0]
+                assert isinstance(first_content, TextContent)
+                assert result_text in first_content.text
 
 
 @pytest.mark.asyncio
 async def test_explain_query_missing_hypopg_integration():
     """Test the explain_query tool when hypopg extension is missing."""
-    # Mock message about missing extension
-    missing_ext_message = "extension is required"
-    mock_text_result = MagicMock()
-    mock_text_result.text = missing_ext_message
+    missing_ext_message = "The hypopg extension is required"
 
-    # Test data
     test_sql = "SELECT * FROM users WHERE email = 'test@example.com'"
     test_indexes = [{"table": "users", "columns": ["email"]}]
 
-    # Create mock SafeSqlDriver that returns empty result (extension not exists)
-    mock_safe_driver = MagicMock()
-    mock_execute_query = AsyncMock(return_value=[])
-    mock_safe_driver.execute_query = mock_execute_query
+    with patch("postgres_mcp.tools.query_tools.get_sql_driver", new_callable=AsyncMock):
+        with patch("postgres_mcp.tools.query_tools.ExplainPlanTool"):
+            with patch(
+                "postgres_mcp.tools.query_tools.check_hypopg_installation_status",
+                new_callable=AsyncMock,
+                return_value=(False, missing_ext_message),
+            ):
+                result = await explain_query(test_sql, analyze=False, hypothetical_indexes=test_indexes)
 
-    # Patch the format_text_response function
-    with patch("postgres_mcp.server.format_text_response", return_value=[mock_text_result]):
-        # Patch the get_sql_driver
-        with patch("postgres_mcp.server.get_sql_driver", return_value=mock_safe_driver):
-            # Patch the ExplainPlanTool
-            with patch("postgres_mcp.server.ExplainPlanTool"):
-                result = await explain_query(test_sql, hypothetical_indexes=test_indexes)
+                from mcp.types import CallToolResult
+                from mcp.types import TextContent
 
-                # Verify result
-                assert isinstance(result, list)
-                assert len(result) == 1
-                assert missing_ext_message in result[0].text
+                assert isinstance(result, CallToolResult)
+                first_content = result.content[0]
+                assert isinstance(first_content, TextContent)
+                assert missing_ext_message in first_content.text
 
 
 @pytest.mark.asyncio
 async def test_explain_query_error_handling_integration():
     """Test the explain_query tool's error handling."""
-    # Mock error response
     error_message = "Error executing query"
-    mock_text_result = MagicMock()
-    mock_text_result.text = f"Error: {error_message}"
 
-    # Patch the format_error_response function
-    with patch("postgres_mcp.server.format_error_response", return_value=[mock_text_result]):
-        # Patch the get_sql_driver to throw an exception
-        with patch(
-            "postgres_mcp.server.get_sql_driver",
-            side_effect=Exception(error_message),
-        ):
-            result = await explain_query("INVALID SQL")
+    with patch(
+        "postgres_mcp.tools.query_tools.get_sql_driver",
+        side_effect=Exception(error_message),
+    ):
+        result = await explain_query("INVALID SQL")
 
-            # Verify error is correctly formatted
-            assert isinstance(result, list)
-            assert len(result) == 1
-            assert error_message in result[0].text
+        from mcp.types import CallToolResult
+        from mcp.types import TextContent
+
+        assert isinstance(result, CallToolResult)
+        assert result.isError is True
+        first_content = result.content[0]
+        assert isinstance(first_content, TextContent)
+        assert error_message in first_content.text
